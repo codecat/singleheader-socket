@@ -60,10 +60,10 @@ public:
 	bool CanRead();
 
 	int sock;
-	int Receive(unsigned char* buffer, int size, int spos = 0);
-	int SendRaw(unsigned char* data, int dataSize);
-	int SendUDP(unsigned char* buffer, int size, sockaddr_in* to);
-	int ReceiveUDP(unsigned char* buffer, int size, sockaddr_in* from);
+	int Receive(const void* buffer, int size, int spos = 0);
+	int SendRaw(const void* data, int dataSize);
+	int SendUDP(const void* buffer, int size, sockaddr_in* to);
+	int ReceiveUDP(const void* buffer, int size, sockaddr_in* from);
 
 private:
 #ifdef _MSC_VER
@@ -270,7 +270,7 @@ bool EzSock::IsError()
 	return true;
 }
 
-int EzSock::ReceiveUDP(unsigned char* buffer, int size, sockaddr_in* from)
+int EzSock::ReceiveUDP(const void* buffer, int size, sockaddr_in* from)
 {
 #ifdef _MSC_VER
 	int client_length = (int)sizeof(struct sockaddr_in);
@@ -280,17 +280,17 @@ int EzSock::ReceiveUDP(unsigned char* buffer, int size, sockaddr_in* from)
 	return recvfrom(this->sock, (char*)buffer, size, 0, (struct sockaddr*)from, &client_length);
 }
 
-int EzSock::Receive(unsigned char* buffer, int size, int spos)
+int EzSock::Receive(const void* buffer, int size, int spos)
 {
 	return recv(this->sock, (char*)buffer + spos, size, 0);
 }
 
-int EzSock::SendUDP(unsigned char* buffer, int size, sockaddr_in* to)
+int EzSock::SendUDP(const void* buffer, int size, sockaddr_in* to)
 {
 	return sendto(this->sock, (char*)buffer, size, 0, (struct sockaddr *)&to, sizeof(struct sockaddr_in));
 }
 
-int EzSock::SendRaw(unsigned char* data, int dataSize)
+int EzSock::SendRaw(const void* data, int dataSize)
 {
 	return send(this->sock, (char*)data, dataSize, 0);
 }
