@@ -4,10 +4,8 @@
 #define _WINSOCKAPI_
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 
-#include <sstream>
-#include <vector>
 #include <fcntl.h>
-#include <ctype.h>
+#include <cctype>
 
 #ifdef _MSC_VER
 #include <winsock2.h>
@@ -32,7 +30,7 @@ public:
 	};
 
 	bool blocking;
-	bool Valid;
+	bool valid;
 
 	struct sockaddr_in addr;
 	struct sockaddr_in fromAddr;
@@ -48,6 +46,7 @@ public:
 	bool create();
 	bool create(int Protocol);
 	bool create(int Protocol, int Type);
+	void setBlocking(bool blocking);
 	bool bind(unsigned short port);
 	bool listen();
 	bool accept(EzSock* socket);
@@ -55,15 +54,16 @@ public:
 	void close();
 
 	long uAddr();
-	bool IsError();
+	bool isError();
 
-	bool CanRead();
+	bool canRead();
+	bool canWrite();
 
 	int sock;
-	int Receive(const void* buffer, int size, int spos = 0);
-	int SendRaw(const void* data, int dataSize);
-	int SendUDP(const void* buffer, int size, sockaddr_in* to);
-	int ReceiveUDP(const void* buffer, int size, sockaddr_in* from);
+	int receive(const void* buffer, int size, int spos = 0);
+	int sendRaw(const void* data, int dataSize);
+	int sendUDP(const void* buffer, int size, sockaddr_in* to);
+	int receiveUDP(const void* buffer, int size, sockaddr_in* from);
 
 private:
 #ifdef _MSC_VER
@@ -71,8 +71,8 @@ private:
 #endif
 	int MAXCON;
 
-	fd_set  *scks;
-	timeval *times;
+	fd_set scks;
+	timeval times;
 
 	unsigned int totaldata;
 	bool check();
@@ -83,8 +83,6 @@ private:
 #ifdef EZS_CPP
 #ifndef __EzSock_CPP__
 #define __EzSock_CPP__
-
-#include <iostream>
 
 #ifdef _MSC_VER
 #pragma comment(lib,"wsock32.lib")
@@ -118,23 +116,19 @@ EzSock::EzSock()
 #endif
 
 	this->sock = INVALID_SOCKET;
-	this->blocking = true;
-	this->Valid = false;
-	this->scks = new fd_set;
-	this->times = new timeval;
-	this->times->tv_sec = 0;
-	this->times->tv_usec = 0;
+	this->blocking = false;
+	this->valid = false;
+	this->times.tv_sec = 0;
+	this->times.tv_usec = 0;
 	this->state = skDISCONNECTED;
 	this->totaldata = 0;
 }
 
 EzSock::~EzSock()
 {
-	if (this->check())
+	if (this->check()) {
 		close();
-
-	delete scks;
-	delete times;
+	}
 }
 
 bool EzSock::check()
@@ -158,8 +152,9 @@ bool EzSock::create(int Protocol)
 
 bool EzSock::create(int Protocol, int Type)
 {
-	if (this->check())
+	if (this->check()) {
 		return false;
+	}
 
 	state = skDISCONNECTED;
 	sock = ::socket(AF_INET, Type, Protocol);
@@ -168,9 +163,26 @@ bool EzSock::create(int Protocol, int Type)
 	return sock > SOCKET_NONE;
 }
 
+void EzSock::setBlocking(bool blocking)
+{
+	if (!check()) {
+		if (!create()) {
+			return;
+		}
+	}
+
+	u_long nonblocking = (blocking ? 0 : 1);
+	ioctlsocket(sock, FIONBIO, &nonblocking);
+	this->blocking = blocking;
+}
+
 bool EzSock::bind(unsigned short port)
 {
-	if (!check()) return false;
+	if (!check()) {
+		if (!create()) {
+			return false;
+		}
+	}
 
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -183,23 +195,28 @@ bool EzSock::bind(unsigned short port)
 bool EzSock::listen()
 {
 	lastCode = ::listen(sock, MAXCON);
-	if (lastCode == SOCKET_ERROR) return false;
+	if (lastCode == SOCKET_ERROR) {
+		return false;
+	}
 
 	state = skLISTENING;
-	this->Valid = true;
+	this->valid = true;
 	return true;
 }
 
 bool EzSock::accept(EzSock* socket)
 {
-	if (!blocking && !CanRead()) return false;
+	if (!blocking && !canRead()) {
+		return false;
+	}
 
 	int length = sizeof(socket->addr);
 	socket->sock = ::accept(sock, (struct sockaddr*) &socket->addr, (socklen_t*)&length);
 
 	lastCode = socket->sock;
-	if (socket->sock == SOCKET_ERROR)
+	if (socket->sock == SOCKET_ERROR) {
 		return false;
+	}
 
 	socket->state = skCONNECTED;
 	return true;
@@ -226,51 +243,68 @@ long EzSock::uAddr()
 
 int EzSock::connect(const char* host, unsigned short port)
 {
-	if (!check())
-		return 1;
+	if (!check()) {
+		if (!create()) {
+			return 1;
+		}
+	}
 
 	struct hostent* phe;
 	phe = gethostbyname(host);
-	if (phe == NULL)
+	if (phe == NULL) {
 		return 2;
+	}
 
 	memcpy(&addr.sin_addr, phe->h_addr, sizeof(struct in_addr));
 
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 
-	if (::connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
-		return 3;
+	if (::connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+		if (this->blocking) {
+			return 3;
+		}
+	}
 
 	state = skCONNECTED;
-	this->Valid = true;
+	this->valid = true;
 	return 0;
 }
 
-bool EzSock::CanRead()
+bool EzSock::canRead()
 {
-	FD_ZERO(scks);
-	FD_SET((unsigned)sock, scks);
+	FD_ZERO(&scks);
+	FD_SET((unsigned)sock, &scks);
 
-	return select(sock + 1, scks, NULL, NULL, times) > 0;
+	return select(sock + 1, &scks, NULL, NULL, &times) > 0;
 }
 
-bool EzSock::IsError()
+bool EzSock::canWrite()
 {
-	if (state == skERROR || sock == -1)
+	FD_ZERO(&scks);
+	FD_SET((unsigned)sock, &scks);
+
+	return select(sock + 1, NULL, &scks, NULL, &times) > 0;
+}
+
+bool EzSock::isError()
+{
+	if (state == skERROR || sock == -1) {
 		return true;
+	}
 
-	FD_ZERO(scks);
-	FD_SET((unsigned)sock, scks);
+	FD_ZERO(&scks);
+	FD_SET((unsigned)sock, &scks);
 
-	if (select(sock + 1, NULL, NULL, scks, times) >= 0)
+	if (select(sock + 1, NULL, NULL, &scks, &times) >= 0) {
 		return false;
+	}
 
 	state = skERROR;
 	return true;
 }
 
-int EzSock::ReceiveUDP(const void* buffer, int size, sockaddr_in* from)
+int EzSock::receiveUDP(const void* buffer, int size, sockaddr_in* from)
 {
 #ifdef _MSC_VER
 	int client_length = (int)sizeof(struct sockaddr_in);
@@ -280,17 +314,17 @@ int EzSock::ReceiveUDP(const void* buffer, int size, sockaddr_in* from)
 	return recvfrom(this->sock, (char*)buffer, size, 0, (struct sockaddr*)from, &client_length);
 }
 
-int EzSock::Receive(const void* buffer, int size, int spos)
+int EzSock::receive(const void* buffer, int size, int spos)
 {
 	return recv(this->sock, (char*)buffer + spos, size, 0);
 }
 
-int EzSock::SendUDP(const void* buffer, int size, sockaddr_in* to)
+int EzSock::sendUDP(const void* buffer, int size, sockaddr_in* to)
 {
 	return sendto(this->sock, (char*)buffer, size, 0, (struct sockaddr *)&to, sizeof(struct sockaddr_in));
 }
 
-int EzSock::SendRaw(const void* data, int dataSize)
+int EzSock::sendRaw(const void* data, int dataSize)
 {
 	return send(this->sock, (char*)data, dataSize, 0);
 }
