@@ -11,6 +11,7 @@
 #include <winsock2.h>
 #else
 #include <netinet/in.h>
+#include <sys/ioctl.h>
 #endif
 
 class EzSock
@@ -33,8 +34,6 @@ public:
 	bool valid;
 
 	struct sockaddr_in addr;
-	struct sockaddr_in fromAddr;
-	unsigned long fromAddr_len;
 
 	SockState state;
 
@@ -46,8 +45,10 @@ public:
 	bool create();
 	bool create(int Protocol);
 	bool create(int Protocol, int Type);
+	void drop();
 	void setBlocking(bool blocking);
 	bool bind(unsigned short port);
+	bool bind(const char* host, unsigned short port);
 	bool listen();
 	bool accept(EzSock* socket);
 	int connect(const char* host, unsigned short port);
@@ -115,7 +116,7 @@ EzSock::EzSock()
 	WSAStartup(MAKEWORD(1, 1), &wsda);
 #endif
 
-	this->sock = INVALID_SOCKET;
+	this->sock = (int)INVALID_SOCKET;
 	this->blocking = false;
 	this->valid = false;
 	this->times.tv_sec = 0;
@@ -157,10 +158,15 @@ bool EzSock::create(int Protocol, int Type)
 	}
 
 	state = skDISCONNECTED;
-	sock = ::socket(AF_INET, Type, Protocol);
+	sock = (int)::socket(AF_INET, Type, Protocol);
 	lastCode = sock;
 
 	return sock > SOCKET_NONE;
+}
+
+void EzSock::drop()
+{
+	sock = SOCKET_NONE;
 }
 
 void EzSock::setBlocking(bool blocking)
@@ -172,20 +178,43 @@ void EzSock::setBlocking(bool blocking)
 	}
 
 	u_long nonblocking = (blocking ? 0 : 1);
+#ifdef _MSC_VER
 	ioctlsocket(sock, FIONBIO, &nonblocking);
+#else
+	ioctl(sock, O_NONBLOCK, &nonblocking);
+#endif
 	this->blocking = blocking;
 }
 
 bool EzSock::bind(unsigned short port)
 {
-	if (!check()) {
-		if (!create()) {
-			return false;
-		}
+	if (!check() && !create()) {
+		return false;
 	}
 
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port = htons(port);
+	lastCode = ::bind(sock, (struct sockaddr*)&addr, sizeof(addr));
+
+	return !lastCode;
+}
+
+bool EzSock::bind(const char* host, unsigned short port)
+{
+	if (!check() && !create()) {
+		return false;
+	}
+
+	struct hostent* phe;
+	phe = gethostbyname(host);
+	if (phe == NULL) {
+		return false;
+	}
+
+	memcpy(&addr.sin_addr, phe->h_addr, sizeof(struct in_addr));
+
+	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 	lastCode = ::bind(sock, (struct sockaddr*)&addr, sizeof(addr));
 
@@ -211,7 +240,7 @@ bool EzSock::accept(EzSock* socket)
 	}
 
 	int length = sizeof(socket->addr);
-	socket->sock = ::accept(sock, (struct sockaddr*) &socket->addr, (socklen_t*)&length);
+	socket->sock = (int)::accept(sock, (struct sockaddr*) &socket->addr, (socklen_t*)&length);
 
 	lastCode = socket->sock;
 	if (socket->sock == SOCKET_ERROR) {
@@ -233,7 +262,7 @@ void EzSock::close()
 	::close(sock);
 #endif
 
-	sock = INVALID_SOCKET;
+	sock = (int)INVALID_SOCKET;
 }
 
 long EzSock::uAddr()
@@ -276,7 +305,7 @@ bool EzSock::canRead()
 	FD_ZERO(&scks);
 	FD_SET((unsigned)sock, &scks);
 
-	return select(sock + 1, &scks, NULL, NULL, &times) > 0;
+	return select((int)sock + 1, &scks, NULL, NULL, &times) > 0;
 }
 
 bool EzSock::canWrite()
@@ -284,7 +313,7 @@ bool EzSock::canWrite()
 	FD_ZERO(&scks);
 	FD_SET((unsigned)sock, &scks);
 
-	return select(sock + 1, NULL, &scks, NULL, &times) > 0;
+	return select((int)sock + 1, NULL, &scks, NULL, &times) > 0;
 }
 
 bool EzSock::isError()
@@ -296,7 +325,7 @@ bool EzSock::isError()
 	FD_ZERO(&scks);
 	FD_SET((unsigned)sock, &scks);
 
-	if (select(sock + 1, NULL, NULL, &scks, &times) >= 0) {
+	if (select((int)sock + 1, NULL, NULL, &scks, &times) >= 0) {
 		return false;
 	}
 
